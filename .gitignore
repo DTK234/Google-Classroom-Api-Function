@@ -1,0 +1,7 @@
+target/
+*.db
+*.sqlite
+src/main/resources/application.yml
+src/main/resources/application.properties
+.idea/
+.vscode/
