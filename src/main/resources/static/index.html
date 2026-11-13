@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HomeGuardian - Google Classroom 功課監控面板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-800">
+
+    <div class="max-w-5xl mx-auto py-8 px-4">
+        <!-- 頂部標題與學生切換欄 (原本的第 12~32 行) -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mb-6 flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900">📚 子女功課完成監控系統</h1>
+                <p class="text-sm text-slate-500 mt-1">即時同步多位兒童的 Google Classroom 課程、作業與繳交狀態</p>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+                <label class="text-sm font-medium text-slate-700">已綁定兒童：</label>
+                <select id="childSelect" onchange="onSelectChild()" 
+                        class="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white font-medium text-slate-700">
+                    <option value="child_01">child_01</option>
+                </select>
+
+                <span class="text-slate-300 mx-1">|</span>
+
+                <input id="childIdInput" type="text" value="child_01" placeholder="輸入新兒童 ID (如 child_02)" 
+                       class="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-44">
+                
+                <button onclick="loadCourses()" 
+                        class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition">
+                    載入課程
+                </button>
+                <button onclick="getAuthUrl()" 
+                        class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium px-4 py-2 rounded-lg border border-slate-300 transition">
+                    🔗 綁定此 ID
+                </button>
+            </div>
+        </div>
+
+        <!-- 狀態提示訊息 -->
+        <div id="alertBox" class="hidden mb-6 p-4 rounded-xl text-sm font-medium"></div>
+
+        <!-- 主內容區：左側課程列表 + 右側作業狀態 -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            
+            <!-- 左側：課程清單 -->
+            <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+                <h2 class="text-lg font-bold text-slate-800 mb-4 flex items-center justify-between">
+                    <span>🏫 修讀課程</span>
+                    <span id="courseCount" class="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full">0 門課</span>
+                </h2>
+                <div id="courseList" class="space-y-2.5">
+                    <p class="text-sm text-slate-400 py-4 text-center">請點擊上方「載入課程」</p>
+                </div>
+            </div>
+
+            <!-- 右側：作業與繳交狀態清單 -->
+            <div class="md:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+                    <div>
+                        <h2 id="currentCourseTitle" class="text-lg font-bold text-slate-800">📝 作業完成情況</h2>
+                        <p id="currentCourseId" class="text-xs text-slate-400"></p>
+                    </div>
+                    <!-- 統計進度標籤 -->
+                    <div id="summaryBadges" class="hidden flex gap-2">
+                        <span id="completedBadge" class="text-xs font-semibold bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full">已完成: 0</span>
+                        <span id="pendingBadge" class="text-xs font-semibold bg-rose-100 text-rose-700 px-3 py-1 rounded-full">未完成: 0</span>
+                    </div>
+                </div>
+
+                <div id="assignmentList" class="space-y-3">
+                    <p class="text-sm text-slate-400 py-12 text-center">👈 請從左側選擇一門課程以檢視功課進度</p>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        function showAlert(message, isError = false) {
+            const box = document.getElementById('alertBox');
+            box.className = `mb-6 p-4 rounded-xl text-sm font-medium ${isError ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-blue-50 text-blue-700 border border-blue-200'}`;
+            box.innerHTML = message;
+            box.classList.remove('hidden');
+        }
+
+        // 讀取後端所有已綁定的兒童清單放入下拉選單
+        async function loadChildrenList() {
+            try {
+                const res = await fetch('/api/auth/children');
+                if (!res.ok) return;
+                const children = await res.json();
+                const selectEl = document.getElementById('childSelect');
+                const inputEl = document.getElementById('childIdInput');
+
+                if (children.length > 0) {
+                    const currentVal = inputEl.value.trim();
+                    selectEl.innerHTML = children.map(id => `<option value="${id}">${id}</option>`).join('');
+                    if (children.includes(currentVal)) {
+                        selectEl.value = currentVal;
+                    } else {
+                        selectEl.value = children[0];
+                        inputEl.value = children[0];
+                    }
+                }
+            } catch (e) {
+                console.warn('無法載入兒童清單', e);
+            }
+        }
+
+        // 當從下拉選單切換兒童時，自動同步輸入框並載入該兒童的課程
+        function onSelectChild() {
+            const selected = document.getElementById('childSelect').value;
+            document.getElementById('childIdInput').value = selected;
+            loadCourses();
+        }
+
+        // 1. 取得 OAuth 授權網址
+        async function getAuthUrl() {
+            const childId = document.getElementById('childIdInput').value.trim();
+            if (!childId) {
+                showAlert('請先在輸入框填寫要綁定的兒童 ID（例如 child_02）！', true);
+                return;
+            }
+            try {
+                const res = await fetch(`/api/auth/url?childId=${encodeURIComponent(childId)}`);
+                const text = await res.text();
+                const urlMatch = text.match(/https?:\/\/[^\s]+/);
+                if (urlMatch) {
+                    window.open(urlMatch[0], '_blank');
+                } else {
+                    showAlert(text);
+                }
+            } catch (e) {
+                showAlert('無法取得授權網址：' + e.message, true);
+            }
+        }
+
+        // 2. 載入學生的課程列表
+        async function loadCourses() {
+            const childId = document.getElementById('childIdInput').value.trim();
+            const courseListEl = document.getElementById('courseList');
+            courseListEl.innerHTML = '<p class="text-sm text-slate-400 py-4 text-center">載入中...</p>';
+            document.getElementById('alertBox').classList.add('hidden');
+
+            try {
+                const res = await fetch(`/api/classroom/courses/${encodeURIComponent(childId)}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                const courses = data.courses || [];
+
+                // 重新整理下拉選單（確保剛綁定好的新兒童出現在選單中）
+                await loadChildrenList();
+
+                document.getElementById('courseCount').textContent = `${courses.length} 門課`;
+
+                if (courses.length === 0) {
+                    courseListEl.innerHTML = '<p class="text-sm text-slate-400 py-4 text-center">找不到任何課程</p>';
+                    document.getElementById('assignmentList').innerHTML = '<p class="text-sm text-slate-400 py-12 text-center">此帳號目前沒有修讀任何課程</p>';
+                    return;
+                }
+
+                courseListEl.innerHTML = courses.map(c => `
+                    <button onclick="loadCourseDetails('${c.id}', '${(c.name || '').replace(/'/g, "\\'")}')"
+                            class="w-full text-left p-3.5 rounded-xl border border-slate-200 hover:border-blue-500 hover:bg-blue-50/50 transition group">
+                        <div class="font-semibold text-slate-800 group-hover:text-blue-600">${c.name || '未命名課程'}</div>
+                        <div class="text-xs text-slate-400 mt-1 flex justify-between">
+                            <span>ID: ${c.id}</span>
+                            <span class="text-blue-500 font-medium">查看作業 →</span>
+                        </div>
+                    </button>
+                `).join('');
+
+                // 自動載入第一門課
+                loadCourseDetails(courses[0].id, courses[0].name);
+            } catch (e) {
+                courseListEl.innerHTML = '<p class="text-sm text-rose-500 py-4 text-center">載入失敗</p>';
+                showAlert(`讀取 [${childId}] 的課程失敗（請確認 ${childId} 是否已完成授權綁定）`, true);
+            }
+        }
+
+        // 3. 同時載入「作業題目 (/work)」與「繳交狀態 (/submissions/all)」並自動合併
+        async function loadCourseDetails(courseId, courseName) {
+            const childId = document.getElementById('childIdInput').value.trim();
+            document.getElementById('currentCourseTitle').textContent = `📝 [${childId}] ${courseName} - 作業清單`;
+            document.getElementById('currentCourseId').textContent = `Course ID: ${courseId}`;
+            const listEl = document.getElementById('assignmentList');
+            listEl.innerHTML = '<p class="text-sm text-slate-400 py-12 text-center">正在同步作業與繳交狀態...</p>';
+
+            try {
+                const [workRes, subRes] = await Promise.all([
+                    fetch(`/api/classroom/work/${encodeURIComponent(childId)}/${encodeURIComponent(courseId)}`),
+                    fetch(`/api/classroom/submissions/all/${encodeURIComponent(childId)}/${encodeURIComponent(courseId)}`)
+                ]);
+
+                const workData = workRes.ok ? await workRes.json() : {};
+                const subData = subRes.ok ? await subRes.json() : {};
+
+                const courseWorkList = workData.courseWork || [];
+                const submissions = subData.studentSubmissions || [];
+
+                // 建立 courseWorkId -> submission 對照表
+                const subMap = {};
+                submissions.forEach(s => { subMap[s.courseWorkId] = s; });
+
+                // 若 courseWork 為空但有 submissions，仍以 submissions 呈現
+                const items = courseWorkList.length > 0 ? courseWorkList : submissions.map(s => ({
+                    id: s.courseWorkId,
+                    title: `作業 (ID: ${s.courseWorkId})`
+                }));
+
+                if (items.length === 0) {
+                    document.getElementById('summaryBadges').classList.add('hidden');
+                    listEl.innerHTML = '<p class="text-sm text-slate-400 py-12 text-center">🎉 這門課程目前沒有任何作業</p>';
+                    return;
+                }
+
+                let completedCount = 0;
+                let pendingCount = 0;
+
+                listEl.innerHTML = items.map(work => {
+                    const sub = subMap[work.id] || {};
+                    const state = sub.state || 'UNKNOWN';
+                    const isDone = (state === 'TURNED_IN' || state === 'RETURNED');
+                    if (isDone) completedCount++; else pendingCount++;
+
+                    const badge = getStatusBadge(state, sub.assignedGrade, work.maxPoints);
+                    const updateTime = sub.updateTime ? new Date(sub.updateTime).toLocaleString('zh-HK') : '無紀錄';
+                    const link = sub.alternateLink || work.alternateLink || '#';
+
+                    return `
+                        <div class="p-4 rounded-xl border ${isDone ? 'border-emerald-200 bg-emerald-50/20' : 'border-rose-200 bg-rose-50/20'} flex flex-wrap items-center justify-between gap-4">
+                            <div>
+                                <div class="flex items-center gap-2">
+                                    <span class="font-bold text-slate-800 text-base">${work.title || `作業 #${work.id}`}</span>
+                                    <span class="text-xs text-slate-400">(#${work.id})</span>
+                                </div>
+                                <div class="text-xs text-slate-500 mt-1">
+                                    最後更新：${updateTime}
+                                </div>
+                            </div>
+
+                            <div class="flex items-center gap-3">
+                                ${badge}
+                                ${link !== '#' ? `<a href="${link}" target="_blank" class="text-xs text-blue-600 hover:underline font-medium">開啟 Classroom ↗</a>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                document.getElementById('completedBadge').textContent = `已完成: ${completedCount}`;
+                document.getElementById('pendingBadge').textContent = `未完成: ${pendingCount}`;
+                document.getElementById('summaryBadges').classList.remove('hidden');
+
+            } catch (e) {
+                listEl.innerHTML = '<p class="text-sm text-rose-500 py-12 text-center">同步作業狀態失敗：' + e.message + '</p>';
+            }
+        }
+
+        // 狀態轉換為中文視覺標籤
+        function getStatusBadge(state, grade, maxPoints) {
+            const scoreText = (grade !== undefined && grade !== null) 
+                ? ` · 得分: ${grade}${maxPoints ? '/' + maxPoints : ''}` 
+                : '';
+
+            switch (state) {
+                case 'TURNED_IN':
+                    return `<span class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500 text-white">✅ 已繳交${scoreText}</span>`;
+                case 'RETURNED':
+                    return `<span class="px-3 py-1 rounded-full text-xs font-bold bg-blue-600 text-white">🏆 已批改發還${scoreText}</span>`;
+                case 'CREATED':
+                case 'NEW':
+                    return `<span class="px-3 py-1 rounded-full text-xs font-bold bg-rose-500 text-white">⏳ 未完成 (尚未繳交)</span>`;
+                case 'RECLAIMED_BY_STUDENT':
+                    return `<span class="px-3 py-1 rounded-full text-xs font-bold bg-amber-500 text-white">↩️ 學生已收回重做</span>`;
+                default:
+                    return `<span class="px-3 py-1 rounded-full text-xs font-bold bg-slate-200 text-slate-600">未知狀態 (${state})</span>`;
+            }
+        }
+
+        // 頁面開啟時自動載入兒童清單與預設小孩的課程 (原本的第 207 行)
+        window.onload = async () => {
+            await loadChildrenList();
+            loadCourses();
+        };
+    </script>
+</body>
+</html>

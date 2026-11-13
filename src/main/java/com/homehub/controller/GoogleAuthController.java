@@ -1,18 +1,24 @@
 package com.homehub.controller;
 
-import com.google.api.client.googleapis.auth.oauth2.*;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.google.api.client.googleapis.auth.oauth2.GoogleAuthorizationCodeFlow;
+import com.google.api.client.googleapis.auth.oauth2.GoogleTokenResponse;
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
 import com.homehub.model.Child;
 import com.homehub.model.GoogleToken;
 import com.homehub.repository.ChildRepository;
 import com.homehub.repository.GoogleTokenRepository;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.web.bind.annotation.*;
-
-import java.util.Arrays;
-import java.util.Collections;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -36,24 +42,24 @@ public class GoogleAuthController {
 
     /**
      * 1. 取得 Google 授權網址
-     * 呼叫範例: GET /api/auth/url?childId=child_01
+     * 呼叫範例: GET /api/auth/url?childId=child_02
      */
     @GetMapping("/url")
     public String getAuthUrl(@RequestParam String childId) throws Exception {
         GoogleAuthorizationCodeFlow flow = new GoogleAuthorizationCodeFlow.Builder(
-                GoogleNetHttpTransport.newTrustedTransport(), 
+                GoogleNetHttpTransport.newTrustedTransport(),
                 GsonFactory.getDefaultInstance(),
-                clientId, 
-                clientSecret, 
+                clientId,
+                clientSecret,
                 Arrays.asList(
-                    "https://www.googleapis.com/auth/classroom.courses.readonly",
-                    "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
-                    "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly"
+                        "https://www.googleapis.com/auth/classroom.courses.readonly",
+                        "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
+                        "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly"
                 )
         )
-                .setAccessType("offline")
-                .setApprovalPrompt("force")
-                .build();
+        .setAccessType("offline")
+        .setApprovalPrompt("force")
+        .build();
 
         return flow.newAuthorizationUrl()
                 .setRedirectUri(redirectUri)
@@ -68,34 +74,40 @@ public class GoogleAuthController {
     @GetMapping("/callback")
     public String callback(@RequestParam String code, @RequestParam String state) throws Exception {
         // 1. 取得 state 傳過來的 childId
-        String childId = state; 
+        String childId = state;
 
-        // 2. 建立 GoogleAuthorizationCodeFlow 物件（解決 flow 找不到的問題）
+        // 2. 建立 GoogleAuthorizationCodeFlow 物件
         GoogleAuthorizationCodeFlow flow = new GoogleAuthorizationCodeFlow.Builder(
                 GoogleNetHttpTransport.newTrustedTransport(),
                 GsonFactory.getDefaultInstance(),
                 clientId,
                 clientSecret,
                 Arrays.asList(
-                    "https://www.googleapis.com/auth/classroom.courses.readonly",
-                    "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
-                    "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly"
+                        "https://www.googleapis.com/auth/classroom.courses.readonly",
+                        "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
+                        "https://www.googleapis.com/auth/classroom.student-submissions.me.readonly"
                 )
         )
         .setAccessType("offline")
         .setApprovalPrompt("force")
         .build();
 
-        // 3. 從資料庫查出真實的 Child 實體
+        // 3. 從資料庫查找該兒童實體，若不存在（例如新輸入 child_02）則自動建立並儲存！
         Child child = childRepository.findById(childId)
-                .orElseThrow(() -> new RuntimeException("找不到對應的兒童 ID: " + childId));
+                .orElseGet(() -> {
+                    Child newChild = new Child();
+                    newChild.setId(childId);
+                    newChild.setName(childId);
+                    newChild.setStatus("LOCKED");
+                    return childRepository.save(newChild);
+                });
 
         // 4. 透過 Google Flow 用 code 交換 token
         GoogleTokenResponse response = flow.newTokenRequest(code)
                 .setRedirectUri(redirectUri)
                 .execute();
 
-        // 5. 先找看看資料庫有沒有舊的 Token，有就覆蓋更新，沒有才新建
+        // 5. 先找看看資料庫有沒有該兒童舊的 Token，有就更新，沒有才新建
         GoogleToken token = tokenRepository.findByChildId(childId)
                 .orElseGet(() -> {
                     GoogleToken newToken = new GoogleToken();
@@ -113,6 +125,18 @@ public class GoogleAuthController {
         // 儲存（更新）至資料庫
         tokenRepository.save(token);
 
-        return "授權成功！已成功綁定 Google Classroom。";
-}
+        return "授權成功！已成功將 Google Classroom 綁定至兒童 ID: [" + childId + "]。請回到監控面板點擊「載入課程」。";
+    }
+
+    /**
+     * 3. 取得目前已綁定的所有兒童 ID 清單（供前端下拉選單使用）
+     */
+    @GetMapping("/children")
+    public List<String> getBoundChildren() {
+        return tokenRepository.findAll()
+                .stream()
+                .map(t -> t.getChild().getId())
+                .distinct()
+                .collect(Collectors.toList());
+    }
 }
