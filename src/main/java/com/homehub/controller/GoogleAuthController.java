@@ -1,12 +1,17 @@
 package com.homehub.controller;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -129,14 +134,48 @@ public class GoogleAuthController {
     }
 
     /**
-     * 3. 取得目前已綁定的所有兒童 ID 清單（供前端下拉選單使用）
+     * 3. 取得目前已綁定的所有兒童清單（僅回傳安全欄位，避免雙向關聯序列化中斷）
      */
     @GetMapping("/children")
-    public List<String> getBoundChildren() {
-        return tokenRepository.findAll()
-                .stream()
-                .map(t -> t.getChild().getId())
-                .distinct()
-                .collect(Collectors.toList());
+    public List<Map<String, Object>> getBoundChildren() {
+        Map<String, Map<String, Object>> uniqueChildren = new HashMap<>();
+
+        for (GoogleToken token : tokenRepository.findAll()) {
+            Child c = token.getChild();
+            if (c != null && c.getId() != null && !uniqueChildren.containsKey(c.getId())) {
+                Map<String, Object> item = new HashMap<>();
+                item.put("id", c.getId());
+                item.put("name", c.getName() != null ? c.getName() : c.getId());
+                uniqueChildren.put(c.getId(), item);
+            }
+        }
+
+        return new ArrayList<>(uniqueChildren.values());
     }
+
+    /**
+     * 4. 讓家長修改兒童的顯示名稱
+     */
+    @PutMapping("/children/{childId}/name")
+    public Map<String, Object> updateChildName(@PathVariable String childId, @RequestParam String name) {
+        Child child = childRepository.findById(childId)
+                .orElseThrow(() -> new RuntimeException("找不到對應的兒童 ID: " + childId));
+        child.setName(name.trim());
+        childRepository.save(child);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("id", child.getId());
+        result.put("name", child.getName());
+        return result;
+    }
+
+    /**
+     * 5. 刪除指定的兒童及其綁定憑證
+     * 呼叫範例: DELETE /api/auth/children/child_02
+     */
+    @DeleteMapping("/children/{childId}")
+    public void deleteChild(@PathVariable String childId) {
+        tokenRepository.findByChildId(childId).ifPresent(tokenRepository::delete);
+        childRepository.findById(childId).ifPresent(childRepository::delete);
+    }   
 }

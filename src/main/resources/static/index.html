@@ -9,38 +9,53 @@
 <body class="bg-slate-50 min-h-screen text-slate-800">
 
     <div class="max-w-5xl mx-auto py-8 px-4">
-        <!-- 頂部標題與學生切換欄 (原本的第 12~32 行) -->
+        <!-- 頂部標題與新增兒童按鈕 -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mb-6 flex flex-wrap items-center justify-between gap-4">
             <div>
                 <h1 class="text-2xl font-bold text-slate-900">📚 子女功課完成監控系統</h1>
-                <p class="text-sm text-slate-500 mt-1">即時同步多位兒童的 Google Classroom 課程、作業與繳交狀態</p>
+                <p class="text-sm text-slate-500 mt-1">點擊下方表格中的兒童即可查看課程與功課進度，無需手動輸入編號</p>
             </div>
 
-            <div class="flex flex-wrap items-center gap-2">
-                <label class="text-sm font-medium text-slate-700">已綁定兒童：</label>
-                <select id="childSelect" onchange="onSelectChild()" 
-                        class="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white font-medium text-slate-700">
-                    <option value="child_01">child_01</option>
-                </select>
-
-                <span class="text-slate-300 mx-1">|</span>
-
-                <input id="childIdInput" type="text" value="child_01" placeholder="輸入新兒童 ID (如 child_02)" 
-                       class="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-44">
-                
-                <button onclick="loadCourses()" 
-                        class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition">
-                    載入課程
+            <div class="flex items-center gap-3">
+                <button onclick="addNewChild()" 
+                        class="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-4 py-2.5 rounded-xl shadow-sm transition flex items-center gap-1.5">
+                    <span>➕ 新增兒童綁定</span>
                 </button>
-                <button onclick="getAuthUrl()" 
-                        class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium px-4 py-2 rounded-lg border border-slate-300 transition">
-                    🔗 綁定此 ID
+                <button onclick="refreshAll()" 
+                        class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2.5 rounded-xl shadow-sm transition">
+                    🔄 重新整理資料
                 </button>
             </div>
         </div>
 
         <!-- 狀態提示訊息 -->
         <div id="alertBox" class="hidden mb-6 p-4 rounded-xl text-sm font-medium"></div>
+
+        <!-- 已綁定兒童選擇表格 -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-bold text-slate-800">👨‍👩‍👧‍👦 已綁定兒童列表（點擊列切換查看）</h2>
+                <span id="childCountBadge" class="text-xs bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-medium">共 0 位兒童</span>
+            </div>
+
+            <div class="overflow-x-auto border border-slate-200 rounded-xl">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
+                            <th class="py-3 px-4 w-24">檢視狀態</th>
+                            <th class="py-3 px-4">兒童名稱</th>
+                            <th class="py-3 px-4">系統編號</th>
+                            <th class="py-3 px-4 text-right">帳號管理操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="childTableBody" class="divide-y divide-slate-200 text-sm">
+                        <tr>
+                            <td colspan="4" class="py-6 text-center text-slate-400">正在載入兒童清單...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
 
         <!-- 主內容區：左側課程列表 + 右側作業狀態 -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -52,7 +67,7 @@
                     <span id="courseCount" class="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full">0 門課</span>
                 </h2>
                 <div id="courseList" class="space-y-2.5">
-                    <p class="text-sm text-slate-400 py-4 text-center">請點擊上方「載入課程」</p>
+                    <p class="text-sm text-slate-400 py-4 text-center">請先從上方表格選擇一位兒童</p>
                 </div>
             </div>
 
@@ -79,6 +94,9 @@
     </div>
 
     <script>
+        let childrenData = [];
+        let selectedChildId = null;
+
         function showAlert(message, isError = false) {
             const box = document.getElementById('alertBox');
             box.className = `mb-6 p-4 rounded-xl text-sm font-medium ${isError ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-blue-50 text-blue-700 border border-blue-200'}`;
@@ -86,49 +104,174 @@
             box.classList.remove('hidden');
         }
 
-        // 讀取後端所有已綁定的兒童清單放入下拉選單
-        async function loadChildrenList() {
+        function getChildNameById(id) {
+            const found = childrenData.find(c => c.id === id);
+            return found ? (found.name || found.id) : id;
+        }
+
+        // 渲染兒童選擇表格
+        function renderChildTable() {
+            const tbody = document.getElementById('childTableBody');
+            document.getElementById('childCountBadge').textContent = `共 ${childrenData.length} 位兒童`;
+
+            if (childrenData.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="4" class="py-8 text-center text-slate-400">
+                            尚未綁定任何兒童，請點擊右上角 <strong>「➕ 新增兒童綁定」</strong> 開始設定。
+                        </td>
+                    </tr>`;
+                return;
+            }
+
+            tbody.innerHTML = childrenData.map(child => {
+                const isSelected = (child.id === selectedChildId);
+                const rowClass = isSelected 
+                    ? 'bg-blue-50/70 cursor-pointer transition' 
+                    : 'hover:bg-slate-50 cursor-pointer transition';
+
+                return `
+                    <tr onclick="selectChild('${child.id}')" class="${rowClass}">
+                        <td class="py-3.5 px-4">
+                            ${isSelected 
+                                ? '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-600 text-white">● 檢視中</span>' 
+                                : '<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-500">點擊切換</span>'}
+                        </td>
+                        <td class="py-3.5 px-4 font-bold text-slate-800 text-base">
+                            ${child.name || child.id}
+                        </td>
+                        <td class="py-3.5 px-4 text-slate-500 font-mono text-xs">
+                            ${child.id}
+                        </td>
+                        <td class="py-3.5 px-4 text-right space-x-1.5" onclick="event.stopPropagation()">
+                            <button onclick="renameChild('${child.id}')" 
+                                    class="bg-white hover:bg-slate-100 text-slate-700 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-slate-300 transition">
+                                ✏️ 改名
+                            </button>
+                            <button onclick="rebindChild('${child.id}')" 
+                                    class="bg-white hover:bg-amber-50 text-amber-700 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-amber-300 transition">
+                                🔄 重綁
+                            </button>
+                            <button onclick="deleteChild('${child.id}')" 
+                                    class="bg-white hover:bg-rose-50 text-rose-600 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-rose-200 transition">
+                                🗑️ 刪除
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // 從後端載入所有已綁定的兒童
+        async function loadChildrenList(preferredId = null) {
             try {
                 const res = await fetch('/api/auth/children');
                 if (!res.ok) return;
-                const children = await res.json();
-                const selectEl = document.getElementById('childSelect');
-                const inputEl = document.getElementById('childIdInput');
+                const list = await res.json();
 
-                if (children.length > 0) {
-                    const currentVal = inputEl.value.trim();
-                    selectEl.innerHTML = children.map(id => `<option value="${id}">${id}</option>`).join('');
-                    if (children.includes(currentVal)) {
-                        selectEl.value = currentVal;
-                    } else {
-                        selectEl.value = children[0];
-                        inputEl.value = children[0];
+                childrenData = list.map(item => (typeof item === 'string') ? { id: item, name: item } : item);
+
+                // 若有待處理的新兒童（剛完成 Google 授權回來），寫入預設名字
+                if (window.pendingNewChild && childrenData.some(c => c.id === window.pendingNewChild.id)) {
+                    const { id, name } = window.pendingNewChild;
+                    window.pendingNewChild = null;
+                    if (name) {
+                        await fetch(`/api/auth/children/${encodeURIComponent(id)}/name?name=${encodeURIComponent(name)}`, { method: 'PUT' });
+                        const target = childrenData.find(c => c.id === id);
+                        if (target) target.name = name;
                     }
+                    preferredId = id;
                 }
+
+                if (childrenData.length > 0) {
+                    const targetId = preferredId || selectedChildId;
+                    if (targetId && childrenData.some(c => c.id === targetId)) {
+                        selectedChildId = targetId;
+                    } else {
+                        selectedChildId = childrenData[0].id;
+                    }
+                } else {
+                    selectedChildId = null;
+                }
+
+                renderChildTable();
             } catch (e) {
                 console.warn('無法載入兒童清單', e);
             }
         }
 
-        // 當從下拉選單切換兒童時，自動同步輸入框並載入該兒童的課程
-        function onSelectChild() {
-            const selected = document.getElementById('childSelect').value;
-            document.getElementById('childIdInput').value = selected;
+        // 點擊表格任一列切換兒童
+        function selectChild(childId) {
+            selectedChildId = childId;
+            renderChildTable();
             loadCourses();
         }
 
-        // 1. 取得 OAuth 授權網址
-        async function getAuthUrl() {
-            const childId = document.getElementById('childIdInput').value.trim();
-            if (!childId) {
-                showAlert('請先在輸入框填寫要綁定的兒童 ID（例如 child_02）！', true);
-                return;
+        // ✏️ 修改指定兒童姓名
+        async function renameChild(childId) {
+            const currentName = getChildNameById(childId);
+            const newName = prompt(`請輸入 [${childId}] 的新顯示名稱（例如：大仔、妹妹）：`, currentName);
+            if (!newName || !newName.trim() || newName.trim() === currentName) return;
+
+            try {
+                const res = await fetch(`/api/auth/children/${encodeURIComponent(childId)}/name?name=${encodeURIComponent(newName.trim())}`, {
+                    method: 'PUT'
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                await loadChildrenList(selectedChildId);
+                if (selectedChildId === childId) loadCourses();
+                showAlert(`✅ 已成功將 [${childId}] 的名稱更新為「${newName.trim()}」！`);
+            } catch (e) {
+                showAlert('修改名稱失敗：' + e.message, true);
             }
+        }
+
+        // 🔄 重新授權指定兒童
+        async function rebindChild(childId) {
+            const childName = getChildNameById(childId);
+            await openAuthWindow(childId, `正在為「${childName} (${childId})」重新取得 Google 授權，完成後請回來按「🔄 重新整理資料」。`);
+        }
+
+        // 🗑️ 刪除指定兒童
+        async function deleteChild(childId) {
+            const childName = getChildNameById(childId);
+            if (!confirm(`確定要刪除「${childName} (${childId})」及其 Google Classroom 綁定紀錄嗎？`)) return;
+
+            try {
+                const res = await fetch(`/api/auth/children/${encodeURIComponent(childId)}`, {
+                    method: 'DELETE'
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                showAlert(`🗑️ 已刪除「${childName} (${childId})」。`);
+                await refreshAll();
+            } catch (e) {
+                showAlert('刪除失敗：' + e.message, true);
+            }
+        }
+
+        // ➕ 新增一位全新的兒童（自動分配編號）
+        async function addNewChild() {
+            let nextNum = 1;
+            const existingIds = childrenData.map(c => c.id);
+            while (existingIds.includes(`child_${String(nextNum).padStart(2, '0')}`)) {
+                nextNum++;
+            }
+            const newChildId = `child_${String(nextNum).padStart(2, '0')}`;
+
+            const customName = prompt(`即將新增兒童綁定（系統自動編號：${newChildId}）。\n\n請輸入這位兒童的顯示名稱（綁定後隨時可按「✏️ 改名」）：`, `兒童 ${nextNum}`);
+            if (customName === null) return;
+
+            window.pendingNewChild = { id: newChildId, name: customName.trim() };
+            await openAuthWindow(newChildId, `已開啟新視窗綁定「${customName.trim() || newChildId} (${newChildId})」！完成 Google 授權後，請回來點擊右上角「🔄 重新整理資料」。`);
+        }
+
+        async function openAuthWindow(childId, infoMessage) {
             try {
                 const res = await fetch(`/api/auth/url?childId=${encodeURIComponent(childId)}`);
                 const text = await res.text();
                 const urlMatch = text.match(/https?:\/\/[^\s]+/);
                 if (urlMatch) {
+                    showAlert(infoMessage);
                     window.open(urlMatch[0], '_blank');
                 } else {
                     showAlert(text);
@@ -138,12 +281,22 @@
             }
         }
 
-        // 2. 載入學生的課程列表
+        // 載入當前選中兒童的課程列表
         async function loadCourses() {
-            const childId = document.getElementById('childIdInput').value.trim();
             const courseListEl = document.getElementById('courseList');
+            const assignmentListEl = document.getElementById('assignmentList');
+
+            if (!selectedChildId) {
+                document.getElementById('courseCount').textContent = '0 門課';
+                courseListEl.innerHTML = '<p class="text-sm text-slate-400 py-4 text-center">請先新增並綁定兒童</p>';
+                assignmentListEl.innerHTML = '<p class="text-sm text-slate-400 py-12 text-center">尚未選擇兒童</p>';
+                document.getElementById('summaryBadges').classList.add('hidden');
+                return;
+            }
+
+            const childId = selectedChildId;
+            const childName = getChildNameById(childId);
             courseListEl.innerHTML = '<p class="text-sm text-slate-400 py-4 text-center">載入中...</p>';
-            document.getElementById('alertBox').classList.add('hidden');
 
             try {
                 const res = await fetch(`/api/classroom/courses/${encodeURIComponent(childId)}`);
@@ -151,14 +304,12 @@
                 const data = await res.json();
                 const courses = data.courses || [];
 
-                // 重新整理下拉選單（確保剛綁定好的新兒童出現在選單中）
-                await loadChildrenList();
-
                 document.getElementById('courseCount').textContent = `${courses.length} 門課`;
 
                 if (courses.length === 0) {
                     courseListEl.innerHTML = '<p class="text-sm text-slate-400 py-4 text-center">找不到任何課程</p>';
-                    document.getElementById('assignmentList').innerHTML = '<p class="text-sm text-slate-400 py-12 text-center">此帳號目前沒有修讀任何課程</p>';
+                    assignmentListEl.innerHTML = '<p class="text-sm text-slate-400 py-12 text-center">此帳號目前沒有修讀任何課程</p>';
+                    document.getElementById('summaryBadges').classList.add('hidden');
                     return;
                 }
 
@@ -173,18 +324,18 @@
                     </button>
                 `).join('');
 
-                // 自動載入第一門課
                 loadCourseDetails(courses[0].id, courses[0].name);
             } catch (e) {
                 courseListEl.innerHTML = '<p class="text-sm text-rose-500 py-4 text-center">載入失敗</p>';
-                showAlert(`讀取 [${childId}] 的課程失敗（請確認 ${childId} 是否已完成授權綁定）`, true);
+                showAlert(`讀取「${childName} (${childId})」的課程失敗，請點擊表格右側的「🔄 重綁」重新授權。`, true);
             }
         }
 
-        // 3. 同時載入「作業題目 (/work)」與「繳交狀態 (/submissions/all)」並自動合併
+        // 載入指定課程的作業與繳交狀態
         async function loadCourseDetails(courseId, courseName) {
-            const childId = document.getElementById('childIdInput').value.trim();
-            document.getElementById('currentCourseTitle').textContent = `📝 [${childId}] ${courseName} - 作業清單`;
+            const childId = selectedChildId;
+            const childName = getChildNameById(childId);
+            document.getElementById('currentCourseTitle').textContent = `📝 [${childName}] ${courseName} - 作業清單`;
             document.getElementById('currentCourseId').textContent = `Course ID: ${courseId}`;
             const listEl = document.getElementById('assignmentList');
             listEl.innerHTML = '<p class="text-sm text-slate-400 py-12 text-center">正在同步作業與繳交狀態...</p>';
@@ -201,11 +352,9 @@
                 const courseWorkList = workData.courseWork || [];
                 const submissions = subData.studentSubmissions || [];
 
-                // 建立 courseWorkId -> submission 對照表
                 const subMap = {};
                 submissions.forEach(s => { subMap[s.courseWorkId] = s; });
 
-                // 若 courseWork 為空但有 submissions，仍以 submissions 呈現
                 const items = courseWorkList.length > 0 ? courseWorkList : submissions.map(s => ({
                     id: s.courseWorkId,
                     title: `作業 (ID: ${s.courseWorkId})`
@@ -259,7 +408,6 @@
             }
         }
 
-        // 狀態轉換為中文視覺標籤
         function getStatusBadge(state, grade, maxPoints) {
             const scoreText = (grade !== undefined && grade !== null) 
                 ? ` · 得分: ${grade}${maxPoints ? '/' + maxPoints : ''}` 
@@ -280,11 +428,13 @@
             }
         }
 
-        // 頁面開啟時自動載入兒童清單與預設小孩的課程 (原本的第 207 行)
-        window.onload = async () => {
+        async function refreshAll() {
+            document.getElementById('alertBox').classList.add('hidden');
             await loadChildrenList();
-            loadCourses();
-        };
+            await loadCourses();
+        }
+
+        window.onload = refreshAll;
     </script>
 </body>
 </html>
